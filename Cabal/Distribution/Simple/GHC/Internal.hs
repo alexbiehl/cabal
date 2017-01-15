@@ -89,7 +89,7 @@ configureToolchain :: GhcImplInfo
                    -> Map String String
                    -> ProgramDb
                    -> ProgramDb
-configureToolchain _implInfo ghcProg ghcInfo =
+configureToolchain implInfo ghcProg ghcInfo =
     addKnownProgram gccProgram {
       programFindLocation = findProg gccProgramName extraGccPath,
       programPostConf     = configureGcc
@@ -193,11 +193,15 @@ configureToolchain _implInfo ghcProg ghcInfo =
              withTempFile tempDir ".o" $ \testofile testohnd -> do
                hPutStrLn testchnd "int foo() { return 0; }"
                hClose testchnd; hClose testohnd
-               runProgram verbosity ghcProg
+               runProgram verbosity ghcProg $
+                          [ "-no-implicit-package-env"
+                          | supportsPkgEnvFiles implInfo
+                          ] ++
                           [ "-hide-all-packages"
                           , "-c", testcfile
                           , "-o", testofile
                           ]
+
                withTempFile tempDir ".o" $ \testofile' testohnd' ->
                  do
                    hClose testohnd'
@@ -274,6 +278,8 @@ componentCcGhcOptions verbosity _implInfo lbi bi clbi odir filename =
                                           ,autogenPackageModulesDir lbi
                                           ,odir]
                                           ++ PD.includeDirs bi,
+      ghcOptNoImplicitPackageEnv
+                           = toFlag True,
       ghcOptHideAllPackages= toFlag True,
       ghcOptPackageDBs     = withPackageDB lbi,
       ghcOptPackages       = toNubListR $ mkGhcOptPackages clbi,
@@ -315,6 +321,8 @@ componentGhcOptions verbosity lbi bi clbi odir =
           -> insts
         _ -> [],
       ghcOptNoCode          = toFlag $ componentIsIndefinite clbi,
+      ghcOptNoImplicitPackageEnv
+                            = toFlag True,
       ghcOptHideAllPackages = toFlag True,
       ghcOptPackageDBs      = withPackageDB lbi,
       ghcOptPackages        = toNubListR $ mkGhcOptPackages clbi,

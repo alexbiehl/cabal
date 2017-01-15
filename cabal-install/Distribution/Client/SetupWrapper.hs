@@ -837,6 +837,8 @@ getExternalSetupMethod verbosity options pkg bt = do
                                       Custom -> toNubListR [workingDir options']
                                       _      -> mempty
             , ghcOptPackageDBs      = usePackageDB options''
+            , ghcOptNoImplicitPackageEnv
+                                    = Flag True
             , ghcOptHideAllPackages = Flag (useDependenciesExclusive options')
             , ghcOptCabal           = Flag (useDependenciesExclusive options')
             , ghcOptPackages        = toNubListR $ map addRenaming selectedDeps

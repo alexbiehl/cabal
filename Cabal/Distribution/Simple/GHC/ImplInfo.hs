@@ -66,7 +66,8 @@ ghcVersionImplInfo ver = GhcImplInfo
   , flagProfAuto         = v >= [7,4]
   , flagPackageConf      = v <  [7,5]
   , flagDebugInfo        = v >= [7,10]
-  , supportsPkgEnvFiles  = v >= [8,0,1,20160901] -- broken in 8.0.1, fixed in 8.0.2
+  , supportsPkgEnvFiles  = v >= [8,1,20170120] -- broken in 8.0.1, attempt to fix in 8.0.2
+                                               -- now hopefully fixed soon TODO: correct date
   }
   where
     v = versionNumbers ver

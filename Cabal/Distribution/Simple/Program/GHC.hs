@@ -114,6 +114,9 @@ data GhcOptions = GhcOptions {
   -- -no-auto-link-packages@ flag.
   ghcOptNoAutoLinkPackages :: Flag Bool,
 
+  -- | Stop GHC from looking for package environment files when run.
+  ghcOptNoImplicitPackageEnv :: Flag Bool,
+
   -----------------
   -- Linker stuff
 
@@ -432,6 +435,10 @@ renderGhcOptions comp _platform@(Platform _arch os) opts
              : []
 
   , concat [ ["-fno-code", "-fwrite-interface"] | flagBool ghcOptNoCode ]
+
+  , [ "-no-implicit-package-env" | flagBool ghcOptNoImplicitPackageEnv
+                                 , supportsPkgEnvFiles implInfo
+                                 ]
 
   , [ "-hide-all-packages"     | flagBool ghcOptHideAllPackages ]
   , [ "-no-auto-link-packages" | flagBool ghcOptNoAutoLinkPackages ]

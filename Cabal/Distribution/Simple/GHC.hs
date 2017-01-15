@@ -759,6 +759,9 @@ buildOrReplLib forRepl verbosity numJobs pkg_descr lbi lib clbi = do
                                               && ghcVersion < mkVersion [7,8]
                                             then toFlag sharedLibInstallPath
                                             else mempty,
+
+                ghcOptNoImplicitPackageEnv
+                                         = toFlag True,
                 ghcOptHideAllPackages    = toFlag True,
                 ghcOptNoAutoLinkPackages = toFlag True,
                 ghcOptPackageDBs         = withPackageDB lbi,
