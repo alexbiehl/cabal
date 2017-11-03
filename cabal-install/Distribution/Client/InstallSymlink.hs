@@ -16,36 +16,15 @@ module Distribution.Client.InstallSymlink (
     symlinkBinary,
   ) where
 
-#ifdef mingw32_HOST_OS
-
-import Distribution.Package (PackageIdentifier)
-import Distribution.Types.UnqualComponentName
-import Distribution.Client.InstallPlan (InstallPlan)
-import Distribution.Client.Types (BuildOutcomes)
-import Distribution.Client.Setup (InstallFlags)
-import Distribution.Simple.Setup (ConfigFlags)
-import Distribution.Simple.Compiler
-import Distribution.System
-
-symlinkBinaries :: Platform -> Compiler
-                -> ConfigFlags
-                -> InstallFlags
-                -> InstallPlan
-                -> BuildOutcomes
-                -> IO [(PackageIdentifier, UnqualComponentName, FilePath)]
-symlinkBinaries _ _ _ _ _ _ = return []
-
-symlinkBinary :: FilePath -> FilePath -> UnqualComponentName -> String -> IO Bool
-symlinkBinary _ _ _ _ = fail "Symlinking feature not available on Windows"
-
-#else
-
 import Distribution.Client.Types
          ( ConfiguredPackage(..), BuildOutcomes )
 import Distribution.Client.Setup
          ( InstallFlags(installSymlinkBinDir) )
 import qualified Distribution.Client.InstallPlan as InstallPlan
 import Distribution.Client.InstallPlan (InstallPlan)
+
+import Distribution.Client.Compat.SymbolicLinks
+         ( isSymbolicLinkFile, removeSymbolicLink, createSymbolicLink )
 
 import Distribution.Solver.Types.SourcePackage
 import Distribution.Solver.Types.OptionalStanza
@@ -70,9 +49,6 @@ import Distribution.System
 import Distribution.Text
          ( display )
 
-import System.Posix.Files
-         ( getSymbolicLinkStatus, isSymbolicLink, createSymbolicLink
-         , removeLink )
 import System.Directory
          ( canonicalizePath )
 import System.FilePath
@@ -211,7 +187,7 @@ symlinkBinary publicBindir privateBindir publicName privateName = do
     relativeBindir = makeRelative publicBindir privateBindir
     mkLink = createSymbolicLink (relativeBindir </> privateName)
                                 (publicBindir   </> publicName')
-    rmLink = removeLink (publicBindir </> publicName')
+    rmLink = removeSymbolicLink (publicBindir </> publicName')
 
 -- | Check a file path of a symlink that we would like to create to see if it
 -- is OK. For it to be OK to overwrite it must either not already exist yet or
@@ -223,8 +199,8 @@ targetOkToOverwrite :: FilePath -- ^ The file path of the symlink to the private
                                 -- Use 'canonicalizePath' to make this.
                     -> IO SymlinkStatus
 targetOkToOverwrite symlink target = handleNotExist $ do
-  status <- getSymbolicLinkStatus symlink
-  if not (isSymbolicLink status)
+  isSymLink <- isSymbolicLinkFile symlink
+  if not isSymLink
     then return NotOurFile
     else do target' <- canonicalizePath symlink
             -- This relies on canonicalizePath handling symlinks
@@ -258,5 +234,3 @@ makeRelative a b = assert (isAbsolute a && isAbsolute b) $
       commonLen = length $ takeWhile id $ zipWith (==) as bs
    in joinPath $ [ ".." | _  <- drop commonLen as ]
               ++ drop commonLen bs
-
-#endif
