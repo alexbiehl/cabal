@@ -70,6 +70,9 @@ import Distribution.Client.Config
          ( loadConfig, getConfigFilePath )
 import qualified Distribution.Client.Glob
          as Glob
+import Distribution.Client.HttpUtils
+         ( HttpTransport, configureTransport, transportCheckHttps
+         , downloadURI )
 
 import Distribution.Solver.Types.SourcePackage
 import Distribution.Solver.Types.Settings
@@ -98,7 +101,7 @@ import Distribution.Simple.InstallDirs
          ( PathTemplate, fromPathTemplate
          , toPathTemplate, substPathTemplate, initialPathTemplateEnv )
 import Distribution.Simple.Utils
-         ( info, die', warn, withTempDirectory )
+         ( info, notice, die', warn, withTempDirectory )
 import Distribution.Client.Utils
          ( determineNumJobs )
 import Distribution.Utils.NubList
@@ -116,10 +119,11 @@ import Data.Either
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
-import System.FilePath hiding (combine)
-import System.Directory
 import Network.URI (URI(..), URIAuth(..), parseAbsoluteURI)
-
+import System.Directory
+import System.FilePath hiding (combine)
+import System.IO
+         ( openTempFile, hClose )
 
 ----------------------------------------
 -- Resolving configuration to settings
@@ -180,6 +184,17 @@ projectConfigWithSolverRepoContext verbosity
       (flagToMaybe projectConfigIgnoreExpiry)
       (fromNubList projectConfigProgPathExtra)
 
+projectConfigWithHttpTransport :: Verbosity
+                               -> ProjectConfigShared
+                               -> ProjectConfigBuildOnly
+                               -> IO HttpTransport
+projectConfigWithHttpTransport verbosity
+                               ProjectConfigShared{..}
+                               ProjectConfigBuildOnly{..} =
+  configureTransport
+    verbosity
+    (fromNubList projectConfigProgPathExtra)
+    (flagToMaybe projectConfigHttpTransport)
 
 -- | Resolve the project configuration, with all its optional fields, into
 -- 'SolverSettings' with no optional fields (by applying defaults).
@@ -887,9 +902,69 @@ mplusMaybeT ma mb = do
     Nothing -> mb
     Just x  -> return (Just x)
 
+readRemoteTarballPackage :: Verbosity -> DistDirLayout -> ProjectConfig -> URI
+                         -> Rebuild (PackageSpecifier UnresolvedSourcePackage)
+readRemoteTarballPackage verbosity
+                         DistDirLayout {
+                           distTempDirectory
+                         }
+                         ProjectConfig {
+                           projectConfigBuildOnly,
+                           projectConfigShared
+                         }
+                         uri = do
+
+  (pkgdesc, pkgloc) <- liftIO $ do
+    httpTransport <- projectConfigWithHttpTransport verbosity
+                       projectConfigShared projectConfigBuildOnly
+
+    withTempDirectory verbosity distTempDirectory "src" $ \tmpdir -> do
+      (tarball, hnd) <- openTempFile distTempDirectory "src"
+      hClose hnd
+
+      -- Download the tarball
+      --
+      downloadTarballPackage httpTransport tarball
+
+      -- Unpack the tarball
+      --
+      info verbosity $ "Extracting " ++ tarball ++ " to " ++ tmpdir
+      extractTarGzFile' tmpdir tarball
+
+      -- Find a cabal file
+      matches <- Glob.matchFileGlob tmpdir dotStarStarCabal
+      case matches of
+        [cabalFile]
+            -> do pkgdesc <-
+                    readGenericPackageDescription verbosity (tmpdir </> cabalFile)
+                  return (pkgdesc, tarball)
+
+        -- TODO: we'd probably want BadPackageLocation for errors
+        []  -> die' verbosity $ "No cabal file found in " ++ tarball
+        _   -> die' verbosity $ "Multiple cabal files found in " ++ tarball
+
+
+  return $ SpecificSourcePackage SourcePackage {
+    packageInfoId        = packageId pkgdesc,
+    packageDescription   = pkgdesc,
+    packageSource        = RemoteTarballPackage uri (Just pkgloc),
+    packageDescrOverride = Nothing
+  }
+  where
+    downloadTarballPackage transport dest = do
+      transportCheckHttps verbosity transport uri
+      notice verbosity ("Downloading " ++ show uri)
+      _ <- downloadURI transport verbosity uri dest
+      return ()
+
+    Just dotStarStarCabal = simpleParse "./*/*.cabal"
+
+
 readLocalTarballPackage :: Verbosity -> DistDirLayout -> FilePath
                         -> Rebuild (PackageSpecifier UnresolvedSourcePackage)
-readLocalTarballPackage verbosity DistDirLayout{ distTempDirectory } tarball = do
+readLocalTarballPackage verbosity DistDirLayout{
+                                    distTempDirectory
+                                  } tarball = do
 
     monitorFiles [monitorFileHashed tarball]
 
@@ -931,15 +1006,17 @@ readLocalTarballPackage verbosity DistDirLayout{ distTempDirectory } tarball = d
 -- Note here is where we convert from project-root relative paths to absolute
 -- paths.
 --
-readSourcePackage :: Verbosity -> DistDirLayout -> ProjectPackageLocation
+readSourcePackage :: Verbosity -> DistDirLayout
+                  -> ProjectConfig -> ProjectPackageLocation
                   -> Rebuild (PackageSpecifier UnresolvedSourcePackage)
-readSourcePackage verbosity distDirLayout (ProjectPackageLocalCabalFile cabalFile) =
-    readSourcePackage verbosity distDirLayout
+readSourcePackage verbosity distDirLayout projectConfig
+  (ProjectPackageLocalCabalFile cabalFile) =
+    readSourcePackage verbosity distDirLayout projectConfig
                       (ProjectPackageLocalDirectory dir cabalFile)
   where
     dir = takeDirectory cabalFile
 
-readSourcePackage verbosity _ (ProjectPackageLocalDirectory dir cabalFile) = do
+readSourcePackage verbosity _ _ (ProjectPackageLocalDirectory dir cabalFile) = do
     monitorFiles [monitorFileHashed cabalFile]
     root <- askRoot
     pkgdesc <- liftIO $ readGenericPackageDescription verbosity (root </> cabalFile)
@@ -950,13 +1027,18 @@ readSourcePackage verbosity _ (ProjectPackageLocalDirectory dir cabalFile) = do
       packageDescrOverride = Nothing
     }
 
-readSourcePackage _ _ (ProjectPackageNamed (Dependency pkgname verrange)) =
+readSourcePackage _ _ _ (ProjectPackageNamed (Dependency pkgname verrange)) =
     return $ NamedPackage pkgname [PackagePropertyVersion verrange]
 
-readSourcePackage verbosity distDirLayout (ProjectPackageLocalTarball tarball) = do
+readSourcePackage verbosity distDirLayout _
+  (ProjectPackageLocalTarball tarball) = do
     readLocalTarballPackage verbosity distDirLayout tarball
 
-readSourcePackage _verbosity _ _ =
+readSourcePackage verbosity distDirLayout projectConfig
+  (ProjectPackageRemoteTarball uri) = do
+    readRemoteTarballPackage verbosity distDirLayout projectConfig uri
+
+readSourcePackage _verbosity _ _ _ =
     fail $ "TODO: add support for fetching and reading local tarballs, remote "
         ++ "tarballs, remote repos and passing named packages through"
 

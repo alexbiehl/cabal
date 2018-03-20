@@ -347,7 +347,7 @@ rebuildProjectConfig verbosity
         createDirectoryIfMissingVerbose verbosity True distTempDirectory
         createDirectoryIfMissingVerbose verbosity True distProjectCacheDirectory
 
-      mapM (readSourcePackage verbosity distDirLayout) localCabalFiles
+      mapM (readSourcePackage verbosity distDirLayout projectConfig) localCabalFiles
 
 
 -- | Return an up-to-date elaborated install plan.
