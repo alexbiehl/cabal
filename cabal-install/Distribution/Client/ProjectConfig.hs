@@ -636,6 +636,8 @@ data BadPackageLocationMatch
    | BadLocNonexistantFile     String
    | BadLocDirNoCabalFile      String
    | BadLocDirManyCabalFiles   String
+   | BadLocTarNoCabalFile      String
+   | BadLocTarManyCabalFiles   String
   deriving Show
 
 renderBadPackageLocations :: BadPackageLocations -> String
@@ -727,6 +729,11 @@ renderBadPackageLocationMatch bplm = case bplm of
     BadLocDirManyCabalFiles pkglocstr ->
         "The package directory '" ++ pkglocstr ++ "' contains multiple "
      ++ ".cabal files (which is not currently supported)."
+    BadLocTarNoCabalFile tarball ->
+        "The tarball '" ++ tarball ++ "' does not contain any .cabal file. "
+    BadLocTarManyCabalFiles tarball ->
+        "The tarball '" ++ tarball ++ "' contains multiple .cabal files "
+     ++ "(which is not currently supported)."
 
 -- | Given the project config,
 --
@@ -902,6 +909,23 @@ mplusMaybeT ma mb = do
     Nothing -> mb
     Just x  -> return (Just x)
 
+projectPackageFindCabalFile :: Verbosity
+                            -> FilePath
+                            -> BadPackageLocationMatch
+                            -> BadPackageLocationMatch
+                            -> IO FilePath
+projectPackageFindCabalFile _ pkgloc noCabalFile manyCabalFiles = do
+  matches <- Glob.matchFileGlob pkgloc dotStarStarCabal
+  case matches of
+    [cabalFile]
+       -> return cabalFile
+    [] -> throwIO (BadPackageLocations undefined [BadPackageLocationFile noCabalFile])
+    _  -> throwIO (BadPackageLocations undefined [BadPackageLocationFile manyCabalFiles])
+  where
+    -- TODO: find a proper way to list all cabal files in the given
+    -- directory.
+    Just dotStarStarCabal = simpleParse "./*/*.cabal"
+
 readRemoteTarballPackage :: Verbosity -> DistDirLayout -> ProjectConfig -> URI
                          -> Rebuild (PackageSpecifier UnresolvedSourcePackage)
 readRemoteTarballPackage verbosity
@@ -932,17 +956,12 @@ readRemoteTarballPackage verbosity
       extractTarGzFile' tmpdir tarball
 
       -- Find a cabal file
-      matches <- Glob.matchFileGlob tmpdir dotStarStarCabal
-      case matches of
-        [cabalFile]
-            -> do pkgdesc <-
-                    readGenericPackageDescription verbosity (tmpdir </> cabalFile)
-                  return (pkgdesc, tarball)
+      cabalFile <- projectPackageFindCabalFile verbosity tmpdir
+                     (BadLocTarNoCabalFile tarball)
+                     (BadLocTarManyCabalFiles tarball)
 
-        -- TODO: we'd probably want BadPackageLocation for errors
-        []  -> die' verbosity $ "No cabal file found in " ++ tarball
-        _   -> die' verbosity $ "Multiple cabal files found in " ++ tarball
-
+      pkgdesc <- readGenericPackageDescription verbosity (tmpdir </> cabalFile)
+      return (pkgdesc, tarball)
 
   return $ SpecificSourcePackage SourcePackage {
     packageInfoId        = packageId pkgdesc,
@@ -956,9 +975,6 @@ readRemoteTarballPackage verbosity
       notice verbosity ("Downloading " ++ show uri)
       _ <- downloadURI transport verbosity uri dest
       return ()
-
-    Just dotStarStarCabal = simpleParse "./*/*.cabal"
-
 
 readLocalTarballPackage :: Verbosity -> DistDirLayout -> FilePath
                         -> Rebuild (PackageSpecifier UnresolvedSourcePackage)
@@ -978,28 +994,19 @@ readLocalTarballPackage verbosity DistDirLayout{
         extractTarGzFile' tmpdir tarball
 
         -- Find a cabal file
-        matches <- Glob.matchFileGlob tmpdir dotStarStarCabal
-        case matches of
-          [cabalFile]
-              -> do pkgdesc <-
-                      readGenericPackageDescription verbosity (tmpdir </> cabalFile)
-                    return pkgdesc
+        cabalFile <- projectPackageFindCabalFile verbosity tmpdir
+                       (BadLocTarNoCabalFile tarball)
+                       (BadLocTarManyCabalFiles tarball)
 
-          -- TODO: we'd probably want BadPackageLocation for errors
-          []  -> die' verbosity $ "No cabal file found in " ++ tarball
-          _   -> die' verbosity $ "Multiple cabal files found in " ++ tarball
+        pkgdesc <- readGenericPackageDescription verbosity (tmpdir </> cabalFile)
+        return pkgdesc
 
-    -- TODO: Just like RemoteTarballPackage LocalTarballPackage
-    -- should have a field for the unpacked source location we
-    -- are unpacking it multiple times otherwise
     return $ SpecificSourcePackage SourcePackage {
       packageInfoId        = packageId pkgdesc,
       packageDescription   = pkgdesc,
       packageSource        = LocalTarballPackage tarball,
       packageDescrOverride = Nothing
     }
-  where
-    Just dotStarStarCabal = simpleParse "./*/*.cabal"
 
 -- | Read the @.cabal@ file of the given package.
 --
