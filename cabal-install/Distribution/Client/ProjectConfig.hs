@@ -57,7 +57,8 @@ import Distribution.Client.ProjectConfig.Legacy
 import Distribution.Client.RebuildMonad
 import Distribution.Client.Glob
          ( isTrivialFilePathGlob )
-
+import Distribution.Client.Tar
+         ( extractTarGzFile' )
 import Distribution.Client.Types
 import Distribution.Client.DistDirLayout
          ( DistDirLayout(..), CabalDirLayout(..), ProjectRoot(..) )
@@ -67,6 +68,8 @@ import Distribution.Client.BuildReports.Types
          ( ReportLevel(..) )
 import Distribution.Client.Config
          ( loadConfig, getConfigFilePath )
+import qualified Distribution.Client.Glob
+         as Glob
 
 import Distribution.Solver.Types.SourcePackage
 import Distribution.Solver.Types.Settings
@@ -95,7 +98,7 @@ import Distribution.Simple.InstallDirs
          ( PathTemplate, fromPathTemplate
          , toPathTemplate, substPathTemplate, initialPathTemplateEnv )
 import Distribution.Simple.Utils
-         ( die', warn )
+         ( info, die', warn, withTempDirectory )
 import Distribution.Client.Utils
          ( determineNumJobs )
 import Distribution.Utils.NubList
@@ -884,20 +887,59 @@ mplusMaybeT ma mb = do
     Nothing -> mb
     Just x  -> return (Just x)
 
+readLocalTarballPackage :: Verbosity -> DistDirLayout -> FilePath
+                        -> Rebuild (PackageSpecifier UnresolvedSourcePackage)
+readLocalTarballPackage verbosity DistDirLayout{ distTempDirectory } tarball = do
+
+    monitorFiles [monitorFileHashed tarball]
+
+    pkgdesc <- liftIO $ do
+
+      withTempDirectory verbosity distTempDirectory "src" $ \tmpdir -> do
+
+        -- Unpack the tarball
+        --
+        info verbosity $ "Extracting " ++ tarball ++ " to " ++ tmpdir
+        extractTarGzFile' tmpdir tarball
+
+        -- Find a cabal file
+        matches <- Glob.matchFileGlob tmpdir dotStarStarCabal
+        case matches of
+          [cabalFile]
+              -> do pkgdesc <-
+                      readGenericPackageDescription verbosity (tmpdir </> cabalFile)
+                    return pkgdesc
+
+          -- TODO: we'd probably want BadPackageLocation for errors
+          []  -> die' verbosity $ "No cabal file found in " ++ tarball
+          _   -> die' verbosity $ "Multiple cabal files found in " ++ tarball
+
+    -- TODO: Just like RemoteTarballPackage LocalTarballPackage
+    -- should have a field for the unpacked source location we
+    -- are unpacking it multiple times otherwise
+    return $ SpecificSourcePackage SourcePackage {
+      packageInfoId        = packageId pkgdesc,
+      packageDescription   = pkgdesc,
+      packageSource        = LocalTarballPackage tarball,
+      packageDescrOverride = Nothing
+    }
+  where
+    Just dotStarStarCabal = simpleParse "./*/*.cabal"
 
 -- | Read the @.cabal@ file of the given package.
 --
 -- Note here is where we convert from project-root relative paths to absolute
 -- paths.
 --
-readSourcePackage :: Verbosity -> ProjectPackageLocation
+readSourcePackage :: Verbosity -> DistDirLayout -> ProjectPackageLocation
                   -> Rebuild (PackageSpecifier UnresolvedSourcePackage)
-readSourcePackage verbosity (ProjectPackageLocalCabalFile cabalFile) =
-    readSourcePackage verbosity (ProjectPackageLocalDirectory dir cabalFile)
+readSourcePackage verbosity distDirLayout (ProjectPackageLocalCabalFile cabalFile) =
+    readSourcePackage verbosity distDirLayout
+                      (ProjectPackageLocalDirectory dir cabalFile)
   where
     dir = takeDirectory cabalFile
 
-readSourcePackage verbosity (ProjectPackageLocalDirectory dir cabalFile) = do
+readSourcePackage verbosity _ (ProjectPackageLocalDirectory dir cabalFile) = do
     monitorFiles [monitorFileHashed cabalFile]
     root <- askRoot
     pkgdesc <- liftIO $ readGenericPackageDescription verbosity (root </> cabalFile)
@@ -908,10 +950,13 @@ readSourcePackage verbosity (ProjectPackageLocalDirectory dir cabalFile) = do
       packageDescrOverride = Nothing
     }
 
-readSourcePackage _ (ProjectPackageNamed (Dependency pkgname verrange)) =
+readSourcePackage _ _ (ProjectPackageNamed (Dependency pkgname verrange)) =
     return $ NamedPackage pkgname [PackagePropertyVersion verrange]
 
-readSourcePackage _verbosity _ =
+readSourcePackage verbosity distDirLayout (ProjectPackageLocalTarball tarball) = do
+    readLocalTarballPackage verbosity distDirLayout tarball
+
+readSourcePackage _verbosity _ _ =
     fail $ "TODO: add support for fetching and reading local tarballs, remote "
         ++ "tarballs, remote repos and passing named packages through"
 

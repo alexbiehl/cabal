@@ -18,6 +18,7 @@ module Distribution.Client.Tar (
   -- * @tar.gz@ operations
   createTarGzFile,
   extractTarGzFile,
+  extractTarGzFile',
 
   -- * Other local utils
   buildTreeRefTypeCode,
@@ -54,6 +55,13 @@ extractTarGzFile :: FilePath -- ^ Destination directory
                 -> IO ()
 extractTarGzFile dir expected tar =
   Tar.unpack dir . Tar.checkTarbomb expected . Tar.read
+  . GZipUtils.maybeDecompress =<< BS.readFile tar
+
+extractTarGzFile' :: FilePath -- ^ Destination directory
+                 -> FilePath -- ^ Tarball
+                -> IO ()
+extractTarGzFile' dir tar =
+  Tar.unpack dir . Tar.read
   . GZipUtils.maybeDecompress =<< BS.readFile tar
 
 instance (Exception a, Exception b) => Exception (Either a b) where

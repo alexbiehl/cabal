@@ -301,7 +301,8 @@ rebuildProjectConfig verbosity
                        distProjectRootDirectory,
                        distDirectory,
                        distProjectCacheFile,
-                       distProjectCacheDirectory
+                       distProjectCacheDirectory,
+                       distTempDirectory
                      }
                      cliConfig = do
 
@@ -339,13 +340,14 @@ rebuildProjectConfig verbosity
     phaseReadLocalPackages projectConfig = do
       localCabalFiles <- findProjectPackages distDirLayout projectConfig
 
-      -- Create folder only if findProjectPackages did not throw a
+      -- Create folders only if findProjectPackages did not throw a
       -- BadPackageLocations exception.
       liftIO $ do
         createDirectoryIfMissingVerbose verbosity True distDirectory
+        createDirectoryIfMissingVerbose verbosity True distTempDirectory
         createDirectoryIfMissingVerbose verbosity True distProjectCacheDirectory
 
-      mapM (readSourcePackage verbosity) localCabalFiles
+      mapM (readSourcePackage verbosity distDirLayout) localCabalFiles
 
 
 -- | Return an up-to-date elaborated install plan.
