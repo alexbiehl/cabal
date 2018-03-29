@@ -307,7 +307,8 @@ rebuildProjectConfig verbosity
 
     (projectConfig, localPackages) <-
       runRebuild distProjectRootDirectory $
-      rerunIfChanged verbosity fileMonitorProjectConfig () $ do
+      rerunIfChanged verbosity fileMonitorProjectConfig
+        fileMonitorProjectConfigInput $ do
 
         projectConfig <- phaseReadProjectConfig
         localPackages <- phaseReadLocalPackages projectConfig
@@ -317,8 +318,14 @@ rebuildProjectConfig verbosity
 
   where
     ProjectConfigShared {
-      projectConfigConfigFile
+      projectConfigConfigFile,
+      projectConfigProjectFile
     } = projectConfigShared cliConfig
+
+    -- Invoking cabal with different `--project-file` parameters
+    -- triggers reconfiguration
+    --
+    fileMonitorProjectConfigInput = projectConfigProjectFile
 
     fileMonitorProjectConfig = newFileMonitor (distProjectCacheFile "config")
 
