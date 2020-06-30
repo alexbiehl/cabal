@@ -579,7 +579,7 @@ configure (pkg_descr0, pbi) cfg = do
       >>= configureRequiredPrograms verbosity requiredBuildTools
 
     (pkg_descr', programDb'') <-
-      configurePkgconfigPackages verbosity pkg_descr programDb' enabled
+      configurePkgconfigPackages verbosity pkg_descr programDb' enabled cfg
 
     -- Compute internal component graph
     --
@@ -1566,8 +1566,9 @@ configureRequiredProgram verbosity progdb
 
 configurePkgconfigPackages :: Verbosity -> PackageDescription
                            -> ProgramDb -> ComponentRequestedSpec
+                           -> ConfigFlags
                            -> IO (PackageDescription, ProgramDb)
-configurePkgconfigPackages verbosity pkg_descr progdb enabled
+configurePkgconfigPackages verbosity pkg_descr progdb enabled cfg
   | null allpkgs = return (pkg_descr, progdb)
   | otherwise    = do
     (_, _, progdb') <- requireProgramVersion
@@ -1640,8 +1641,9 @@ configurePkgconfigPackages verbosity pkg_descr progdb enabled
     pkgconfigBuildInfo []      = return mempty
     pkgconfigBuildInfo pkgdeps = do
       let pkgs = nub [ prettyShow pkg | PkgconfigDependency pkg _ <- pkgdeps ]
+          static = [ "--static" | fromFlag (configFullyStaticExe cfg) ]
       ccflags <- pkgconfig ("--cflags" : pkgs)
-      ldflags <- pkgconfig ("--libs"   : pkgs)
+      ldflags <- pkgconfig ("--libs"   : static ++ pkgs)
       return (ccLdOptionsBuildInfo (words ccflags) (words ldflags))
 
 -- | Makes a 'BuildInfo' from C compiler and linker flags.
